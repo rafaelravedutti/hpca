@@ -92,7 +92,7 @@ int main(int argc, const char *argv[]) {
     exit(0);
   }
 
-  for(i = 0; i < 1 << HIST_SIZE; ++i) {
+  for(i = 0; i < (1 << HIST_SIZE); ++i) {
     pattern_history[i] = 0;
   }
 
@@ -124,22 +124,20 @@ int main(int argc, const char *argv[]) {
           predict_taken = (pattern_history[btb[i].history] < 2);
 
           /* Not Taken */
-          if(address + size == next_address) {
-            if(added_recently == 0) {
-              if(predict_taken == 0) {
-                cycles += BTB_HIT;
-                acum_hit += BTB_HIT;
-              } else {
-                cycles += BTB_MISS_PREDICTED;
-                acum_miss_pred += BTB_MISS_PREDICTED;
-              }
-
-              if(pattern_history[btb[i].history] > 0) {
-                --pattern_history[btb[i].history];
-              }
-
-              btb[i].history = (btb[i].history << 1);
+          if(address + size == next_address && added_recently == 0) {
+            if(predict_taken == 0) {
+              cycles += BTB_HIT;
+              acum_hit += BTB_HIT;
+            } else {
+              cycles += BTB_MISS_PREDICTED;
+              acum_miss_pred += BTB_MISS_PREDICTED;
             }
+
+            if(pattern_history[btb[i].history] > 0) {
+              --pattern_history[btb[i].history];
+            }
+
+            btb[i].history = (btb[i].history << 1);
           /* Taken */
           } else {
             if(added_recently == 0) {
