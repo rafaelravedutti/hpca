@@ -1,3 +1,24 @@
+/*
+ * Branch Predictors Comparisons
+ *
+ * Copyright (C) 2016  Mateus Ravedutti Lucio Machado
+ *                     Rafael Ravedutti Lucio Machado
+ * 
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,32 +44,31 @@ struct branch_table {
 static struct branch_table btb[BTB_SIZE];
 
 int get_opcode(const char *filename, char *assembly, char *opcode, unsigned long *address, unsigned long *size, unsigned *is_cond) {
+  static FILE *file = NULL;
   char buf[CHUNK];
   char *sub_string = NULL;
   char *tmp_ptr = NULL;
+  int i = 0, count = 0;
 
-  static FILE *file = NULL;
-
-  if (file == NULL) {
+  if(file == NULL) {
     file = fopen(filename, "r");
-    if (file == NULL){
+    if (file == NULL) {
       fprintf(stderr, "Could not open file.\n");
       exit(1);
     }
   }
 
-  if(!fgets(buf, sizeof buf, file))
-    return (0);
+  if(!fgets(buf, sizeof buf, file)) {
+    return 0;
+  }
 
-  // Check trace file
-  int i=0, count=0;
 
-  while (buf[i] != '\0') {
+  while(buf[i] != '\0') {
     count += (buf[i] == ';');
     i++;
   }
 
-  if (count != 4) {
+  if(count != 4) {
     fprintf(stderr, "Error reading trace (Wrong  number of fields)\n");
     fprintf(stderr, "%s", buf);
     exit(2);
