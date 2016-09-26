@@ -30,8 +30,9 @@
 #define BTB_MISS             5
 #define BTB_MISS_PREDICTED   4
 #define HIST_SIZE            4
+#define NUM_COUNTERS         16 /* 2**HIST_SIZE */
 
-#define BRANCH_PREDICTOR     two_bit_predictor
+#define BRANCH_PREDICTOR     two_level_predictor_v2
 
 struct branch_table {
   unsigned long int address;
@@ -61,7 +62,6 @@ int get_opcode(const char *filename, char *assembly, char *opcode, unsigned long
   if(!fgets(buf, sizeof buf, file)) {
     return 0;
   }
-
 
   while(buf[i] != '\0') {
     count += (buf[i] == ';');
@@ -97,8 +97,7 @@ int get_opcode(const char *filename, char *assembly, char *opcode, unsigned long
   return 1;
 }
 
-
-void not_taken_predictor(unsigned int index, unsigned long address, unsigned long size, unsigned long next_address, unsigned int added_recently, unsigned char *hit) {
+void not_taken_predictor(unsigned int index, unsigned long address, unsigned long size, unsigned long next_address, unsigned char *hit) {
   if(address + size == next_address) {
     *hit = 1;
   } else {
@@ -106,8 +105,8 @@ void not_taken_predictor(unsigned int index, unsigned long address, unsigned lon
   }
 }
 
-void two_bit_predictor(unsigned int index, unsigned long address, unsigned long size, unsigned long next_address, unsigned int added_recently, unsigned char *hit) {
-  if(address + size == next_address && added_recently == 0) {
+void two_bit_predictor(unsigned int index, unsigned long address, unsigned long size, unsigned long next_address, unsigned char *hit) {
+  if(address + size == next_address) {
     if(btb[index].counter < 2) {
       *hit = 1;
     } else {
@@ -118,29 +117,35 @@ void two_bit_predictor(unsigned int index, unsigned long address, unsigned long 
       --btb[index].counter;
     }
   } else {
-    if(added_recently == 0) {
-      if(btb[index].counter < 2 || btb[index].target != next_address) {
-        *hit = 0;
-      } else {
-        *hit = 1;
-      }
+    if(btb[index].counter < 2 || btb[index].target != next_address) {
+      *hit = 0;
+    } else {
+      *hit = 1;
+    }
 
-      if(btb[index].counter < 3) {
-        ++btb[index].counter;
-      }
+    if(btb[index].counter < 3) {
+      ++btb[index].counter;
     }
   }
-
-  btb[index].target = next_address;
 }
 
-void two_level_predictor(unsigned int index, unsigned long address, unsigned long size, unsigned long next_address, unsigned int added_recently, unsigned char *hit) {
-  static unsigned char pattern_history[1 << HIST_SIZE];
+void two_level_predictor(unsigned int index, unsigned long address, unsigned long size, unsigned long next_address, unsigned char *hit) {
+  static unsigned char pattern_history[1 << HIST_SIZE] = { 0 };
+  static int initialized = 0;
   char predict_taken;
+  unsigned int i;
+
+  if(initialized == 0) {
+    for(i = 0; i < (1 << HIST_SIZE); ++i) {
+      pattern_history[i] = 0;
+    }
+
+    initialized = 1;
+  }
 
   predict_taken = (pattern_history[btb[index].history] < 2);
 
-  if(address + size == next_address && added_recently == 0) {
+  if(address + size == next_address) {
     if(predict_taken == 0) {
       *hit = 1;
     } else {
@@ -153,22 +158,122 @@ void two_level_predictor(unsigned int index, unsigned long address, unsigned lon
 
     btb[index].history = (btb[index].history << 1);
   } else {
-    if(added_recently == 0) {
-      if(predict_taken == 0 || btb[index].target != next_address) {
-        *hit = 0;
-      } else {
-        *hit = 1;
-      }
+    if(predict_taken == 0 || btb[index].target != next_address) {
+      *hit = 0;
+    } else {
+      *hit = 1;
+    }
 
-      if(pattern_history[btb[index].history] < 3) {
-        ++pattern_history[btb[index].history];
-      }
+    if(pattern_history[btb[index].history] < 3) {
+      ++pattern_history[btb[index].history];
+    }
 
-      btb[index].history = (btb[index].history << 1) | 0x1;
+    btb[index].history = (btb[index].history << 1) | 0x1;
+  }
+}
+
+void two_level_predictor_v2(unsigned int index, unsigned long address, unsigned long size, unsigned long next_address, unsigned char *hit) {
+  static unsigned char pattern_history[1 << HIST_SIZE];
+  static int bhr[HIST_SIZE];
+  static int initialized = 0;
+  unsigned long next_fetch;
+  unsigned int pht_idx, i, k;
+
+  if(initialized == 0) {
+    for(i = 0; i < (1 << HIST_SIZE); ++i) {
+      pattern_history[i] = 0;
+    }
+
+    for(i = 0; i < HIST_SIZE; ++i) {
+      bhr[i] = 0;
+    }
+
+    initialized = 1;
+  }
+
+  for(pht_idx = 0, k = 0; k < HIST_SIZE; ++k) {
+    pht_idx += bhr[k] << ((HIST_SIZE - 1) - k);
+  }
+
+  pht_idx ^= address & 0xF;
+  next_fetch = (pattern_history[pht_idx] >= 2) ? (btb[i].target) : (address + size);
+
+  if(next_fetch == next_address) {
+    *hit = 1;
+  } else {
+    *hit = 0;
+  }
+
+  if(next_address == address + size) {
+    if(pattern_history[pht_idx] > 0) {
+      --pattern_history[pht_idx];
+    }
+  } else {
+    if(pattern_history[pht_idx] < 3) {
+      ++pattern_history[pht_idx];
     }
   }
 
-  btb[index].target = next_address;
+  for(i = 0; i < HIST_SIZE - 1; ++i) {
+    bhr[i] = bhr[i + 1];
+  }
+
+  bhr[HIST_SIZE - 1] = (next_address != address + size);
+}
+
+void perceptron_predictor(unsigned int index, unsigned long address, unsigned long size, unsigned long next_address, unsigned char *hit) {
+  static int perceptron_weights[NUM_COUNTERS][HIST_SIZE];
+  static int bhr[HIST_SIZE];
+  static int initialized = 0;
+  unsigned long next_fetch;
+  unsigned int pt_idx, i, k;
+  int pred, target;
+
+  if(initialized == 0) {
+    for(i = 0; i < NUM_COUNTERS; ++i) {
+      for(k = 0; k < HIST_SIZE; ++k) {
+        perceptron_weights[i][k] = 1;
+      }
+    }
+
+    for(i = 0; i < HIST_SIZE; ++i) {
+      bhr[i] = 1;
+    }
+
+    initialized = 1;
+  }
+
+  for(pt_idx = 0, k = 0; k < HIST_SIZE; ++k) {
+    pt_idx += bhr[k] << ((HIST_SIZE - 1) - k);
+  }
+
+  pt_idx ^= address & 0xF;
+
+  for(pred = 0, i = 0; i < HIST_SIZE; ++i) {
+    pred += perceptron_weights[pt_idx][i] * (bhr[i] == 0 ? (-1) : (1));
+  }
+
+  next_fetch = (pred > 0) ? (btb[index].target) : (address + size);
+
+  if(next_fetch == next_address) {
+    *hit = 1;
+  } else {
+    *hit = 0;
+  }
+
+  target = (next_address == size + address) ? (-1) : (1);
+
+  if(*hit == 0 || abs(pred) < HIST_SIZE) {
+    for(i = 0; i < HIST_SIZE; ++i) {
+      perceptron_weights[pt_idx][i] += target * (bhr[i] == 0 ? (-1) : (1));
+    }
+  }
+
+  for(i = 0; i < HIST_SIZE - 1; ++i) {
+    bhr[i] = bhr[i + 1];
+  }
+
+  bhr[HIST_SIZE - 1] = (next_address != address + size);
 }
 
 int main(int argc, const char *argv[]) {
@@ -180,7 +285,7 @@ int main(int argc, const char *argv[]) {
   unsigned long cycles = 0;
   unsigned long acum_hit = 0, acum_miss = 0, acum_miss_pred = 0;
   unsigned int is_cond, next_is_cond; 
-  unsigned int index, added_recently;
+  unsigned int index, added_recently, j;
 
   if(argc < 2) {
     fprintf(stdout, "Uso: %s <trace file>\n", argv[0]);
@@ -206,28 +311,28 @@ int main(int argc, const char *argv[]) {
         btb[index].valid = 1;
         btb[index].history = 0;
         btb[index].counter = 0;
-        cycles += BTB_MISS;
-        acum_miss += BTB_MISS;
+        ++acum_miss;
         added_recently = 1;
       }
 
-      if(get_opcode(argv[1], assembly, opcode, &next_address, &next_size, &next_is_cond)) {
-        if(is_cond) {
-          BRANCH_PREDICTOR(index, address, size, next_address, added_recently, &hit);
-
+      if(is_cond) {
+        if(get_opcode(argv[1], assembly, opcode, &next_address, &next_size, &next_is_cond)) {
           if(added_recently == 0) {
+            BRANCH_PREDICTOR(index, address, size, next_address, &hit);
+
             if(hit == 1) {
-              cycles += BTB_HIT;
-              acum_hit += BTB_HIT;
+              ++acum_hit;
             } else {
-              cycles += BTB_MISS_PREDICTED;
-              acum_miss_pred += BTB_MISS_PREDICTED;
+              ++acum_miss_pred;
             }
           }
-        } else if(added_recently == 0) {
-          cycles += BTB_HIT;
-          acum_hit += BTB_HIT;
+
+          if(next_address != address + size) {
+            btb[index].target = next_address;
+          }
         }
+      } else if(added_recently == 0) {
+        ++acum_hit;
       }
     } else {
       ++cycles;
@@ -238,6 +343,7 @@ int main(int argc, const char *argv[]) {
     is_cond = next_is_cond;
   }
 
+  cycles += (acum_miss * BTB_MISS) + (acum_hit * BTB_HIT) + (acum_miss_pred * BTB_MISS_PREDICTED);
   fprintf(stdout, "Cycles: %lu\nAcum_hit: %ld\nAcum_miss: %ld\nAcum_miss_pred: %ld\n", cycles, acum_hit, acum_miss, acum_miss_pred);
   return 0;
 }
