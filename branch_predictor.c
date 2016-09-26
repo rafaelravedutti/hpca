@@ -196,7 +196,7 @@ void two_level_predictor_v2(unsigned int index, unsigned long address, unsigned 
   }
 
   pht_idx ^= address & 0xF;
-  next_fetch = (pattern_history[pht_idx] >= 2) ? (btb[i].target) : (address + size);
+  next_fetch = (pattern_history[pht_idx] >= 2) ? (btb[index].target) : (address + size);
 
   if(next_fetch == next_address) {
     *hit = 1;
