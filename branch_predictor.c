@@ -327,7 +327,6 @@ int main(int argc, const char *argv[]) {
 
         if(added_recently == 0) {
           if(is_cond) {
-            hit = 0;
             BRANCH_PREDICTOR(index, address, size, next_address, &hit);
 
             if(hit == 1) {
