@@ -287,7 +287,7 @@ int main(int argc, const char *argv[]) {
   unsigned long cycles = 0;
   unsigned long acum_hit = 0, acum_miss = 0, acum_miss_pred = 0;
   unsigned int is_cond, next_is_cond; 
-  unsigned int index, added_recently, j;
+  unsigned int index, added_recently;
 
   if(argc < 2) {
     fprintf(stdout, "Uso: %s <trace file>\n", argv[0]);
