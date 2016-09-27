@@ -32,7 +32,9 @@
 #define HIST_SIZE            4
 #define NUM_COUNTERS         16 /* 2**HIST_SIZE */
 
-#define BRANCH_PREDICTOR     two_level_predictor_v2
+#ifndef BRANCH_PREDICTOR
+#  define BRANCH_PREDICTOR   perceptron_predictor
+#endif
 
 struct branch_table {
   unsigned long int address;
@@ -306,18 +308,26 @@ int main(int argc, const char *argv[]) {
       index = address & 63;
       added_recently = 0;
 
-      if(btb[index].valid == 0 || btb[index].address != address) {
-        btb[index].address = address;
-        btb[index].valid = 1;
-        btb[index].history = 0;
-        btb[index].counter = 0;
-        ++acum_miss;
-        added_recently = 1;
-      }
+      if(get_opcode(argv[1], assembly, opcode, &next_address, &next_size, &next_is_cond)) {
+        if(btb[index].valid == 0 || btb[index].address != address) {
+          btb[index].address = address;
+          btb[index].valid = 1;
+          btb[index].history = 0;
+          btb[index].counter = 0;
+          btb[index].target = 0;
 
-      if(is_cond) {
-        if(get_opcode(argv[1], assembly, opcode, &next_address, &next_size, &next_is_cond)) {
-          if(added_recently == 0) {
+          if(next_address != address + size) {
+            ++acum_miss;
+          } else {
+            ++acum_hit;
+          }
+
+          added_recently = 1;
+        }
+
+        if(added_recently == 0) {
+          if(is_cond) {
+            hit = 0;
             BRANCH_PREDICTOR(index, address, size, next_address, &hit);
 
             if(hit == 1) {
@@ -325,14 +335,14 @@ int main(int argc, const char *argv[]) {
             } else {
               ++acum_miss_pred;
             }
-          }
-
-          if(next_address != address + size) {
-            btb[index].target = next_address;
+          } else {
+            ++acum_hit;
           }
         }
-      } else if(added_recently == 0) {
-        ++acum_hit;
+
+        if(next_address != address + size) {
+          btb[index].target = next_address;
+        }
       }
     } else {
       ++cycles;
