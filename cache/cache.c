@@ -110,7 +110,7 @@ int main(int argc, const char *argv[]) {
   unsigned long address;
   unsigned long read_register1, read_register2, write_register;
 
-  while(get_opcode(argv[1], assembly, opcode, &address, &read_register1, &read_register2, &write_register)){
+  while(get_opcode(argv[1], assembly, opcode, &address, &read_register1, &read_register2, &write_register)) {
     printf(" Asm:%s", assembly);
     printf(" Opcode:%s", opcode);
     printf(" Address:%lu", address);
