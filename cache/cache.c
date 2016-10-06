@@ -26,7 +26,10 @@
    - Non Inclusve
 */
 
+#pragma unused l1_null_data
 static unsigned char l1_null_data[L1_BLOCK_SIZE] = { 0 };
+
+#pragma unused l2_null_data
 static unsigned char l2_null_data[L2_BLOCK_SIZE] = { 0 };
 
 int fetch_data_from_l1(unsigned long address, unsigned char data[L1_BLOCK_SIZE]) {
@@ -50,7 +53,6 @@ int get_opcode(const char *filename, char *assembly, char *opcode, unsigned long
   char *sub_string = NULL;
   char *tmp_ptr = NULL;
   char buf[CHUNK];
-  size_t nread;
   int i = 0, count = 0;
 
   if(file == NULL) {
