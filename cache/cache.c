@@ -12,7 +12,7 @@
 
 /* L2 cache parameters */
 #define L2_SIZE         (2 * 1024 * 1024)
-#define L2_WAYS         4
+#define L2_WAYS         8
 #define L2_BLOCK_SIZE   64
 #define L2_LATENCY      4
 
