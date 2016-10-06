@@ -1,0 +1,8 @@
+L1 64KB, 4W, 64B
+L2 2MB,  8W, 64B
+45nm 2GHz
+150 cycles DRAM
+Write-Back (Allocate)
+Non Inclusive
+LRU
+CACTI
