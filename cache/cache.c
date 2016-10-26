@@ -214,8 +214,7 @@ int main(int argc, char *const *argv) {
         verbose = 1;
         break;
       default:
-        fprintf(stderr, "Invalid option: -%c\n"
-                        "Usage: %s [-v] <trace file>\n", optopt, argv[0]);
+        fprintf(stderr, "Usage: %s [-v] <trace file>\n", argv[0]);
         exit(EXIT_FAILURE);
     }
   }
