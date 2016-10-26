@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #define CHUNK 1024      /* read 1024 bytes at a time */
 
@@ -67,7 +68,7 @@ int get_least_recently_used(struct cache_entry entries[], unsigned int nways) {
   return result;
 }
  
-int fetch_data_from_l1(unsigned long address) {
+int fetch_data_from_l1(unsigned long address, unsigned int *way) {
   unsigned long tag, index, offset;
   unsigned int i;
 
@@ -77,6 +78,7 @@ int fetch_data_from_l1(unsigned long address) {
 
   for(i = 0; i < L1_WAYS; ++i) {
     if(l1_cache[index][i].valid == 1 && l1_cache[index][i].tag == tag) {
+      *way = i;
       return FETCH_HIT;
     }
   }
@@ -84,7 +86,7 @@ int fetch_data_from_l1(unsigned long address) {
   return FETCH_MISS;
 }
 
-int fetch_data_from_l2(unsigned long address) {
+int fetch_data_from_l2(unsigned long address, unsigned int *way) {
   unsigned long tag, index, offset;
   unsigned int i;
 
@@ -94,6 +96,7 @@ int fetch_data_from_l2(unsigned long address) {
 
   for(i = 0; i < L2_WAYS; ++i) {
     if(l2_cache[index][i].valid == 1 && l2_cache[index][i].tag == tag) {
+      *way = i;
       return FETCH_HIT;
     }
   }
@@ -101,30 +104,36 @@ int fetch_data_from_l2(unsigned long address) {
   return FETCH_MISS;
 }
 
-void write_l1_data(unsigned long address, unsigned long long cycle) {
-  unsigned long tag, index, offset, way;
+void write_l1_data(unsigned long address, int way, int dirty, unsigned long long cycle) {
+  unsigned long tag, index, offset;
 
   tag = address >> 16;
   index = (address >> 6) & 0x3FF;
   offset = address & 0x3F;
-  way = get_least_recently_used(l1_cache[index], L1_WAYS);
+
+  if(way < 0) {
+    way = get_least_recently_used(l1_cache[index], L1_WAYS);
+  }
 
   l1_cache[index][way].valid = 1;
-  l1_cache[index][way].dirty = 1;
+  l1_cache[index][way].dirty = dirty;
   l1_cache[index][way].tag = tag;
   l1_cache[index][way].cycle = cycle + L1_LATENCY;
 }
 
-void write_l2_data(unsigned long address, unsigned long long cycle) {
-  unsigned long tag, index, offset, way;
+void write_l2_data(unsigned long address, int way, int dirty, unsigned long long cycle) {
+  unsigned long tag, index, offset;
 
   tag = address >> 22;
   index = (address >> 6) & 0x7FFF;
   offset = address & 0x3F;
-  way = get_least_recently_used(l2_cache[index], L1_WAYS);
+
+  if(way < 0) {
+    way = get_least_recently_used(l2_cache[index], L1_WAYS);
+  }
 
   l2_cache[index][way].valid = 1;
-  l2_cache[index][way].dirty = 1;
+  l2_cache[index][way].dirty = dirty;
   l2_cache[index][way].tag = tag;
   l2_cache[index][way].cycle = cycle + L2_LATENCY;
 }
@@ -188,16 +197,35 @@ int get_opcode(const char *filename, char *assembly, char *opcode, unsigned long
   return 1;
 }
 
-int main(int argc, const char *argv[]) {
+int main(int argc, char *const *argv) {
   char assembly[20];
   char opcode[20];
   int verbose = 0;
+  int opt;
+  unsigned int way;
   unsigned long address;
   unsigned long read_register1, read_register2, write_register;
   unsigned long l1_hit = 0, l1_miss = 0, l2_hit = 0, l2_miss = 0;
   unsigned long long cycles = 0;
 
-  while(get_opcode(argv[1], assembly, opcode, &address, &read_register1, &read_register2, &write_register)) {
+  while((opt = getopt(argc, argv, "v")) != -1) {
+    switch(opt) {
+      case 'v':
+        verbose = 1;
+        break;
+      default:
+        fprintf(stderr, "Invalid option: -%c\n"
+                        "Usage: %s [-v] <trace file>\n", optopt, argv[0]);
+        exit(EXIT_FAILURE);
+    }
+  }
+
+  if(optind >= argc) {
+    fprintf(stderr, "Usage: %s [-v] <trace file>\n", argv[0]);
+    exit(EXIT_FAILURE);
+  }
+
+  while(get_opcode(argv[optind], assembly, opcode, &address, &read_register1, &read_register2, &write_register)) {
     ++cycles;
 
     if(verbose != 0) {
@@ -211,22 +239,24 @@ int main(int argc, const char *argv[]) {
     }
 
 #ifndef CACHE_LOOKUP
-#define CACHE_LOOKUP(address)   if(address != 0) {                                      \
-                                  if(fetch_data_from_l1(address) == FETCH_MISS) {       \
-                                    if(fetch_data_from_l2(address) == FETCH_MISS) {     \
-                                      cycles += DRAM_LATENCY;                           \
-                                      ++l2_miss;                                        \
-                                    } else {                                            \
-                                      ++l2_hit;                                         \
-                                    }                                                   \
-                                                                                        \
-                                    cycles += L2_LATENCY;                               \
-                                    ++l1_miss;                                          \
-                                  } else {                                              \
-                                    ++l1_hit;                                           \
-                                  }                                                     \
-                                                                                        \
-                                  cycles += L1_LATENCY;                                 \
+#define CACHE_LOOKUP(address)   if(address != 0) {                                            \
+                                  if(fetch_data_from_l1(address, &way) == FETCH_MISS) {       \
+                                    if(fetch_data_from_l2(address, &way) == FETCH_MISS) {     \
+                                      cycles += DRAM_LATENCY;                                 \
+                                      ++l2_miss;                                              \
+                                      write_l2_data(address, -1, 0, cycles);                  \
+                                    } else {                                                  \
+                                      ++l2_hit;                                               \
+                                      write_l1_data(address, -1, 0, cycles);                  \
+                                    }                                                         \
+                                                                                              \
+                                    cycles += L2_LATENCY;                                     \
+                                    ++l1_miss;                                                \
+                                  } else {                                                    \
+                                    ++l1_hit;                                                 \
+                                  }                                                           \
+                                                                                              \
+                                  cycles += L1_LATENCY;                                       \
                                 }
 #endif
 
@@ -234,7 +264,24 @@ int main(int argc, const char *argv[]) {
     CACHE_LOOKUP(read_register2);
 
     if(write_register != 0) {
-      /* ... */
+      if(fetch_data_from_l1(write_register, &way) == FETCH_MISS) {
+        if(fetch_data_from_l2(write_register, &way) == FETCH_MISS) {
+          cycles += DRAM_LATENCY;
+          ++l2_miss;
+          write_l2_data(write_register, -1, 1, cycles);
+        } else {
+          ++l2_hit;
+          write_l1_data(write_register, -1, 1, cycles);
+        }
+
+        cycles += L2_LATENCY;
+        ++l1_miss;
+      } else {
+        ++l1_hit;
+        write_l1_data(write_register, way, 1, cycles);
+      }
+
+      cycles += L1_LATENCY;
     }
   }
 
