@@ -265,8 +265,8 @@ int main(int argc, char *const *argv) {
     if(write_register != 0) {
       if(fetch_data_from_l1(write_register, &way) == FETCH_MISS) {
         if(fetch_data_from_l2(write_register, &way) == FETCH_MISS) {
-          cycles += DRAM_LATENCY;
-          ++l2_miss;
+          cycles += DRAM_LATENCY; /* Needed? */
+          ++l2_miss;              /* Needed? */
           write_l2_data(write_register, -1, 1, cycles);
         } else {
           ++l2_hit;
