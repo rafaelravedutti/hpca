@@ -28,13 +28,16 @@
 /* PC based stride prefetcher table lines */
 #define STRIDE_PREFETCHER_ENTRIES   64
 
+/* Stride prefetcher states */
+#define STATE_INIT                  0
+#define STATE_TRANSIENT             1
+#define STATE_STEADY                2
+#define STATE_NO_PRED               3
+
 /* Cache prefetcher */
 #ifndef CACHE_PREFETCHER
-#  define CACHE_PREFETCHER          stride_based_prefetcher
+#  define CACHE_PREFETCHER          no_prefetcher
 #endif
-
-/* Unused macro (avoid warnings) */
-#define UNUSED(x)                   x
 
 /* Policies:
    - Write Back with Write-Allocate
@@ -49,7 +52,7 @@ struct cache_entry {
   int dirty;
 };
 
-struct pc_stride_entry {
+struct reference_prediction_entry {
   unsigned long tag;
   unsigned long last_address;
   unsigned int stride;
@@ -58,7 +61,7 @@ struct pc_stride_entry {
 
 static struct cache_entry l1_cache[L1_SIZE / L1_BLOCK_SIZE][L1_WAYS];
 static struct cache_entry l2_cache[L2_SIZE / L2_BLOCK_SIZE][L2_WAYS];
-static struct pc_stride_entry pc_stride_table[STRIDE_PREFETCHER_ENTRIES];
+static struct reference_prediction_entry reference_prediction_table[STRIDE_PREFETCHER_ENTRIES];
 
 int get_least_recently_used(struct cache_entry entries[], unsigned int nways) {
   int result = 0;
@@ -147,6 +150,10 @@ void write_l2_data(unsigned long address, int way, int dirty, unsigned long long
   l2_cache[index][way].cycle = cycle + L2_LATENCY;
 }
 
+void no_prefetcher(unsigned long pc, unsigned long address, unsigned long long cycle) {
+  /* Does nothing */
+}
+
 void stride_based_prefetcher(unsigned long pc, unsigned long address, unsigned long long cycle) {
   static int initialized = 0;
   int index, available;
@@ -154,7 +161,7 @@ void stride_based_prefetcher(unsigned long pc, unsigned long address, unsigned l
 
   if(initialized == 0) {
     for(i = 0; i < STRIDE_PREFETCHER_ENTRIES; ++i) {
-      pc_stride_table[i].state = 0; /* Init */
+      reference_prediction_table[i].state = STATE_INIT;
     }
 
     initialized = 1;
@@ -162,41 +169,53 @@ void stride_based_prefetcher(unsigned long pc, unsigned long address, unsigned l
 
   index = -1;
   available = -1;
+
   for(i = 0; i < STRIDE_PREFETCHER_ENTRIES; ++i) {
-    if(pc_stride_table[i].state == 0 && available == -1) {
+    if(reference_prediction_table[i].state == STATE_INIT && available == -1) {
       available = i;
     }
 
-    if(pc_stride_table[i].tag == pc) {
+    if(reference_prediction_table[i].tag == pc) {
       index = i;
       break;
     }
   }
 
   if(index == -1 && available != -1) {
-    pc_stride_table[available].tag = pc;
-    pc_stride_table[available].last_address = address;
-    pc_stride_table[available].state = 1; /* Transient */
-    pc_stride_table[available].stride = 1;
+    reference_prediction_table[available].tag = pc;
+    reference_prediction_table[available].last_address = address;
+    reference_prediction_table[available].state = STATE_TRANSIENT;
+    reference_prediction_table[available].stride = 0;
   }
 
   if(index != -1) {
     /* Correct */
-    if(pc_stride_table[index].stride == pc - pc_stride_table[index].last_address) {
-      if(pc_stride_table[index].state == 3) { /* No Pred */
-        pc_stride_table[index].state = 1; /* Transient */
+    if(reference_prediction_table[index].stride == address - reference_prediction_table[index].last_address) {
+      if(reference_prediction_table[index].state == STATE_NO_PRED) {
+        reference_prediction_table[index].state = STATE_TRANSIENT;
       } else {
-        pc_stride_table[index].state = 2; /* Steady */
+        reference_prediction_table[index].state = STATE_STEADY;
       }
     /* Incorrect */
     } else {
-
+      if(reference_prediction_table[index].state == STATE_INIT) {
+        reference_prediction_table[index].stride = address - reference_prediction_table[index].last_address;
+        reference_prediction_table[index].state = STATE_TRANSIENT;
+      } else if(reference_prediction_table[index].state == STATE_TRANSIENT || reference_prediction_table[index].state == STATE_NO_PRED) {
+        reference_prediction_table[index].stride = address - reference_prediction_table[index].last_address;
+        reference_prediction_table[index].state = STATE_NO_PRED;
+      } else if(reference_prediction_table[index].state == STATE_STEADY) {
+        reference_prediction_table[index].state = STATE_INIT;
+      }
     }
 
-    pc_stride_table[index].stride = pc - pc_stride_table[index].last_address;
-  }
+    if(reference_prediction_table[index].state != STATE_NO_PRED) {
+      write_l1_data(address + reference_prediction_table[index].stride, -1, 0, cycle);
+      write_l2_data(address + reference_prediction_table[index].stride, -1, 0, cycle);
+    }
 
-  write_l2_data(address, -1, 0, cycle);
+    reference_prediction_table[index].last_address = address;
+  }
 }
 
 int get_opcode(const char *filename, char *assembly, char *opcode, unsigned long *address, unsigned long *read_register1, unsigned long *read_register2, unsigned long *write_register){
@@ -323,12 +342,14 @@ int main(int argc, char *const *argv) {
 
     CACHE_LOOKUP(read_register1);
     CACHE_LOOKUP(read_register2);
+    CACHE_LOOKUP(write_register);
 
+/*
     if(write_register != 0) {
       if(fetch_data_from_l1(write_register, &way) == FETCH_MISS) {
         if(fetch_data_from_l2(write_register, &way) == FETCH_MISS) {
-          cycles += DRAM_LATENCY; /* Needed? */
-          ++l2_miss;              /* Needed? */
+          cycles += DRAM_LATENCY; // Needed?
+          ++l2_miss;              // Needed?
           write_l2_data(write_register, -1, 1, cycles);
         } else {
           ++l2_hit;
@@ -345,6 +366,8 @@ int main(int argc, char *const *argv) {
       cycles += L1_LATENCY;
       CACHE_PREFETCHER(address, write_register, cycles);
     }
+*/
+
   }
 
   fprintf(stdout, "Cycles: %llu\nL1 Hit/Miss: %lu/%lu\nL2 Hit/Miss: %lu/%lu\n", cycles, l1_hit, l1_miss, l2_hit, l2_miss);
