@@ -201,7 +201,8 @@ void stride_based_prefetcher(unsigned long pc, unsigned long address, unsigned l
       if(reference_prediction_table[index].state == STATE_INIT) {
         reference_prediction_table[index].stride = address - reference_prediction_table[index].last_address;
         reference_prediction_table[index].state = STATE_TRANSIENT;
-      } else if(reference_prediction_table[index].state == STATE_TRANSIENT || reference_prediction_table[index].state == STATE_NO_PRED) {
+      } else if(reference_prediction_table[index].state == STATE_TRANSIENT ||
+                reference_prediction_table[index].state == STATE_NO_PRED) {
         reference_prediction_table[index].stride = address - reference_prediction_table[index].last_address;
         reference_prediction_table[index].state = STATE_NO_PRED;
       } else if(reference_prediction_table[index].state == STATE_STEADY) {
@@ -218,7 +219,8 @@ void stride_based_prefetcher(unsigned long pc, unsigned long address, unsigned l
   }
 }
 
-int get_opcode(const char *filename, char *assembly, char *opcode, unsigned long *address, unsigned long *read_register1, unsigned long *read_register2, unsigned long *write_register){
+int get_opcode(const char *filename, char *assembly, char *opcode, unsigned long *address, unsigned long *read_register1,
+               unsigned long *read_register2, unsigned long *write_register){
   static FILE *file = NULL;
   char *sub_string = NULL;
   char *tmp_ptr = NULL;
