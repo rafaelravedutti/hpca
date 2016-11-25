@@ -34,6 +34,11 @@
 #define STATE_STEADY                2
 #define STATE_NO_PRED               3
 
+/* Variable Length Delta Prefetcher parameters */
+#define PAGE_SIZE                   (8 * 1024)
+#define DELTA_HISTORY_LENGTH        64
+#define DELTA_PREDICTION_TABLES     3
+
 /* Cache prefetcher */
 #ifndef CACHE_PREFETCHER
 #  define CACHE_PREFETCHER          no_prefetcher
@@ -59,9 +64,29 @@ struct reference_prediction_entry {
   unsigned char state; /* Init - Trans - Steady - No Pred */
 };
 
+struct delta_history_table_entry {
+  unsigned long page_number;
+  unsigned long last_address;
+  unsigned int last_predictor;
+  unsigned int times_used;
+  int last_deltas[4];
+  int last_prefetched_offsets[4];
+};
+
+struct offset_prediction_table_entry {
+  int delta_prediction;
+  int accuracy;
+};
+
+struct delta_prediction_table_entry {
+  int deltas[DELTA_PREDICTION_TABLES];
+  int prediction;
+  int accuracy;
+  int nmru;
+};
+
 static struct cache_entry l1_cache[L1_SIZE / L1_BLOCK_SIZE][L1_WAYS];
 static struct cache_entry l2_cache[L2_SIZE / L2_BLOCK_SIZE][L2_WAYS];
-static struct reference_prediction_entry reference_prediction_table[STRIDE_PREFETCHER_ENTRIES];
 
 int get_least_recently_used(struct cache_entry entries[], unsigned int nways) {
   int result = 0;
@@ -155,6 +180,7 @@ void no_prefetcher(unsigned long pc, unsigned long address, unsigned long long c
 }
 
 void stride_based_prefetcher(unsigned long pc, unsigned long address, unsigned long long cycle) {
+  static struct reference_prediction_entry reference_prediction_table[STRIDE_PREFETCHER_ENTRIES];
   static int initialized = 0;
   int index, available;
   unsigned int i;
@@ -217,6 +243,12 @@ void stride_based_prefetcher(unsigned long pc, unsigned long address, unsigned l
 
     reference_prediction_table[index].last_address = address;
   }
+}
+
+void variable_length_delta_prefetcher(unsigned long pc, unsigned long address, unsigned long long cycle) {
+  static struct delta_history_table_entry delta_history_table[DELTA_HISTORY_LENGTH];
+  static struct offset_prediction_table_entry offset_prediction_table[PAGE_SIZE / L2_BLOCK_SIZE];
+  static struct delta_prediction_table_entry delta_prediction_table[DELTA_PREDICTION_TABLES];
 }
 
 int get_opcode(const char *filename, char *assembly, char *opcode, unsigned long *address, unsigned long *read_register1,
