@@ -38,10 +38,14 @@
 #define PAGE_SIZE                   (8 * 1024)
 #define DELTA_HISTORY_LENGTH        64
 #define DELTA_PREDICTION_TABLES     3
+#define PREDICTION_TABLE_LENGTH     64
+
+/* Minimum function */
+#define MIN(a,b)                    (((a) < (b)) ? (a) : (b))
 
 /* Cache prefetcher */
 #ifndef CACHE_PREFETCHER
-#  define CACHE_PREFETCHER          no_prefetcher
+#  define CACHE_PREFETCHER          variable_length_delta_prefetcher
 #endif
 
 /* Policies:
@@ -77,6 +81,8 @@ struct delta_history_table_entry {
 struct offset_prediction_table_entry {
   int delta_prediction;
   int accuracy;
+  int first_access;
+  unsigned long last_address;
 };
 
 struct delta_prediction_table_entry {
@@ -116,11 +122,11 @@ int not_most_recently_used(struct delta_history_table_entry *dbh) {
   for(i = 1; i < DELTA_HISTORY_LENGTH; ++i) {
     if(dbh[i].cycle < min_cycle) {
       lru = i;
-      min_cycle = entries[i].cycle;
+      min_cycle = dbh[i].cycle;
     }
   }
 
-  while((result = rand() % DELTA_HISTORY_BUFFER_LENGTH) == lru);
+  while((result = rand() % DELTA_HISTORY_LENGTH) == lru);
 
   return result;
 }
@@ -268,23 +274,91 @@ void stride_based_prefetcher(unsigned long pc, unsigned long address, unsigned l
 void variable_length_delta_prefetcher(unsigned long pc, unsigned long address, unsigned long long cycle) {
   static struct delta_history_table_entry delta_history_table[DELTA_HISTORY_LENGTH];
   static struct offset_prediction_table_entry offset_prediction_table[PAGE_SIZE / L2_BLOCK_SIZE];
-  static struct delta_prediction_table_entry delta_prediction_table[DELTA_PREDICTION_TABLES];
+  static struct delta_prediction_table_entry delta_prediction_table[DELTA_PREDICTION_TABLES][PREDICTION_TABLE_LENGTH];
   unsigned int page_number;
-  unsigned int i;
-  int index = -1;
+  unsigned int i, j, k;
+  int opt_index, dht_index = -1, dpt_index = -1, dpt_table = 0, delta = 0, matches;
 
+  /* Offset Prediction Table */
+  opt_index = (address % PAGE_SIZE) / L2_BLOCK_SIZE;
+
+  if(offset_prediction_table[opt_index].first_access == 0) {
+    offset_prediction_table[opt_index].delta_prediction = 0;
+    offset_prediction_table[opt_index].accuracy = 0;
+    offset_prediction_table[opt_index].first_access = 1;
+  } else {
+    if(offset_prediction_table[opt_index].accuracy == 1) {
+      write_l1_data(address + offset_prediction_table[opt_index].delta_prediction, -1, 0, cycle);
+      write_l2_data(address + offset_prediction_table[opt_index].delta_prediction, -1, 0, cycle);
+    }
+
+    if(address - offset_prediction_table[opt_index].last_address == offset_prediction_table[opt_index].delta_prediction) {
+      offset_prediction_table[opt_index].accuracy = 1;
+    } else {
+      if(offset_prediction_table[opt_index].accuracy == 0) {
+        offset_prediction_table[opt_index].delta_prediction = address - offset_prediction_table[opt_index].last_address;
+      }
+
+      offset_prediction_table[opt_index].accuracy = 0;
+    }
+  }
+
+  offset_prediction_table[opt_index].last_address = address;
+
+  /* Delta History Table */
   page_number = address / PAGE_SIZE;
 
+  /* Fully associative search */
   for(i = 0; i < DELTA_HISTORY_LENGTH; ++i) {
     if(delta_history_table[i].page_number == page_number) {
-      index = i;
+      dht_index = i;
       break;
     }
   }
 
-  if(index == -1) {
-    index = not_most_recently_used(delta_history_table, DELTA_HISTORY_LENGTH);
+  if(dht_index == -1) {
+    dht_index = not_most_recently_used(delta_history_table);
+    delta_history_table[dht_index].page_number = page_number;
+    delta_history_table[dht_index].times_used = 0;
+  } else {
+    delta = (address % PAGE_SIZE) - delta_history_table[dht_index].last_address;
   }
+
+  delta_history_table[dht_index].last_address = address % PAGE_SIZE;
+
+  for(i = 0; i < 3; ++i) {
+    delta_history_table[dht_index].last_deltas[i + 1] = delta_history_table[dht_index].last_deltas[i];
+  }
+
+  delta_history_table[dht_index].last_deltas[0] = delta;
+
+  /* Delta Prediction Table */
+  matches = 0;
+  for(i = 0; i < MIN(DELTA_PREDICTION_TABLES, delta_history_table[dht_index].times_used) && dpt_index == -1; ++i) {
+    for(j = 0; j < PREDICTION_TABLE_LENGTH && dpt_index == -1; ++j) {
+      matches = 0;
+
+      for(k = 0; k < i + 1; ++j) {
+        if(delta_history_table[dht_index].last_deltas[k] == delta_prediction_table[i][j].deltas[k]) {
+          ++matches;
+        }
+      }
+
+      if(matches == i + 1) {
+        dpt_table = i;
+        dpt_index = j;
+        break;
+      }
+    }
+  }
+
+  for(i = 0; i < 3; ++i) {
+    delta_history_table[dht_index].last_prefetched_offsets[i + 1] = delta_history_table[dht_index].last_prefetched_offsets[i];
+  }
+
+  delta_history_table[dht_index].last_prefetched_offsets[0] = delta_prediction_table[dpt_index][dpt_index].prediction;
+  delta_history_table[dht_index].last_predictor = dpt_table;
+  delta_history_table[dht_index].times_used++;
 }
 
 int get_opcode(const char *filename, char *assembly, char *opcode, unsigned long *address, unsigned long *read_register1,
