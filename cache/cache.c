@@ -371,7 +371,7 @@ void variable_length_delta_prefetcher(unsigned long pc, unsigned long address, u
     }
   }
 
-  if(dbt_table != -1 && dpt_index != -1) {
+  if(dpt_table != -1 && dpt_index != -1) {
     for(i = 0; i < 3; ++i) {
       delta_history_table[dht_index].last_prefetched_offsets[i + 1] = delta_history_table[dht_index].last_prefetched_offsets[i];
     }
