@@ -352,7 +352,6 @@ void variable_length_delta_prefetcher(unsigned long pc, unsigned long address, u
   delta_history_table[dht_index].last_deltas[0] = delta;
 
   /* Delta Prediction Table */
-  matches = 0;
   for(i = 0; i < MIN(DELTA_PREDICTION_TABLES, delta_history_table[dht_index].times_used) && dpt_index == -1; ++i) {
     for(j = 0; j < PREDICTION_TABLE_LENGTH && dpt_index == -1; ++j) {
       matches = 0;
@@ -376,8 +375,42 @@ void variable_length_delta_prefetcher(unsigned long pc, unsigned long address, u
       delta_history_table[dht_index].last_prefetched_offsets[i + 1] = delta_history_table[dht_index].last_prefetched_offsets[i];
     }
 
-    delta_history_table[dht_index].last_prefetched_offsets[0] = delta_prediction_table[dpt_index][dpt_index].prediction;
+    /* Update accuracy */
+    if(delta_prediction_table[dpt_table][dpt_index].prediction == delta) {
+      if(delta_prediction_table[dpt_table][dpt_index].accuracy < 3) {
+        delta_prediction_table[dpt_table][dpt_index].accuracy++;
+      }
+    } else {
+      if(delta_prediction_table[dpt_table][dpt_index].accuracy > 0) {
+        delta_prediction_table[dpt_table][dpt_index].accuracy--;
+      }
+    }
+
+    delta_history_table[dht_index].last_prefetched_offsets[0] = delta_prediction_table[dpt_table][dpt_index].prediction;
     delta_history_table[dht_index].last_predictor = dpt_table;
+  }
+
+  if(delta_history_table[dht_index].times_used > 0) {
+    /* New entry to Delta Prediction Table */
+    if(dpt_table == -1 || dpt_index == -1) {
+      dpt_table = delta_history_table[dht_index].times_used - 1;
+
+      do {
+        i = rand() % PREDICTION_TABLE_LENGTH;
+      } while(delta_prediction_table[dpt_table][i].nmru == 0);
+
+      for(j = 0; j < PREDICTION_TABLE_LENGTH; ++j) {
+        delta_prediction_table[dpt_table][j].nmru = 1;
+      }
+
+      for(j = 0; j < 3; ++j) {
+        delta_prediction_table[dpt_table][j + 1] = delta_prediction_table[dpt_table][j];
+      }
+
+      delta_prediction_table[dpt_table][i].nmru = 0;
+      delta_prediction_table[dpt_table][i].prediction = 0;
+      delta_prediction_table[dpt_table][i].accuracy = 1;
+    }
   }
 
   delta_history_table[dht_index].times_used++;
@@ -521,14 +554,12 @@ int main(int argc, char *const *argv) {
           ++l2_hit;
           write_l1_data(write_register, -1, 1, cycles);
         }
-
         cycles += L2_LATENCY;
         ++l1_miss;
       } else {
         ++l1_hit;
         write_l1_data(write_register, way, 1, cycles);
       }
-
       cycles += L1_LATENCY;
       CACHE_PREFETCHER(address, write_register, cycles);
     }
