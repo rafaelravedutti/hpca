@@ -275,9 +275,28 @@ void variable_length_delta_prefetcher(unsigned long pc, unsigned long address, u
   static struct delta_history_table_entry delta_history_table[DELTA_HISTORY_LENGTH];
   static struct offset_prediction_table_entry offset_prediction_table[PAGE_SIZE / L2_BLOCK_SIZE];
   static struct delta_prediction_table_entry delta_prediction_table[DELTA_PREDICTION_TABLES][PREDICTION_TABLE_LENGTH];
+  static int initialized = 0;
   unsigned int page_number;
   unsigned int i, j, k;
-  int opt_index, dht_index = -1, dpt_index = -1, dpt_table = 0, delta = 0, matches;
+  int opt_index, dht_index = -1, dpt_index = -1, dpt_table = -1, delta = 0, matches;
+
+  if(initialized == 0) {
+    for(i = 0; i < PAGE_SIZE / L2_BLOCK_SIZE; ++i) {
+      offset_prediction_table[i].first_access = 0;
+    }
+
+    for(i = 0; i < DELTA_HISTORY_LENGTH; ++i) {
+      delta_history_table[i].times_used = 0;
+    }
+
+    for(i = 0; i < DELTA_PREDICTION_TABLES; ++i) {
+      for(j = 0; j < DELTA_PREDICTION_TABLES; ++j) {
+        delta_prediction_table[i][j].nmru = 1;
+      }
+    }
+
+    initialized = 1;
+  }
 
   /* Offset Prediction Table */
   opt_index = (address % PAGE_SIZE) / L2_BLOCK_SIZE;
@@ -352,12 +371,15 @@ void variable_length_delta_prefetcher(unsigned long pc, unsigned long address, u
     }
   }
 
-  for(i = 0; i < 3; ++i) {
-    delta_history_table[dht_index].last_prefetched_offsets[i + 1] = delta_history_table[dht_index].last_prefetched_offsets[i];
+  if(dbt_table != -1 && dpt_index != -1) {
+    for(i = 0; i < 3; ++i) {
+      delta_history_table[dht_index].last_prefetched_offsets[i + 1] = delta_history_table[dht_index].last_prefetched_offsets[i];
+    }
+
+    delta_history_table[dht_index].last_prefetched_offsets[0] = delta_prediction_table[dpt_index][dpt_index].prediction;
+    delta_history_table[dht_index].last_predictor = dpt_table;
   }
 
-  delta_history_table[dht_index].last_prefetched_offsets[0] = delta_prediction_table[dpt_index][dpt_index].prediction;
-  delta_history_table[dht_index].last_predictor = dpt_table;
   delta_history_table[dht_index].times_used++;
 }
 
