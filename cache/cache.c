@@ -67,6 +67,7 @@ struct reference_prediction_entry {
 struct delta_history_table_entry {
   unsigned long page_number;
   unsigned long last_address;
+  unsigned long cycle;
   unsigned int last_predictor;
   unsigned int times_used;
   int last_deltas[4];
@@ -104,7 +105,26 @@ int get_least_recently_used(struct cache_entry entries[], unsigned int nways) {
 
   return result;
 }
- 
+
+int not_most_recently_used(struct delta_history_table_entry *dbh) {
+  int result = 0, lru = 0;
+  unsigned long long min_cycle;
+  unsigned int i;
+
+  min_cycle = dbh[0].cycle;
+
+  for(i = 1; i < DELTA_HISTORY_LENGTH; ++i) {
+    if(dbh[i].cycle < min_cycle) {
+      lru = i;
+      min_cycle = entries[i].cycle;
+    }
+  }
+
+  while((result = rand() % DELTA_HISTORY_BUFFER_LENGTH) == lru);
+
+  return result;
+}
+
 int fetch_data_from_l1(unsigned long address, unsigned int *way) {
   unsigned long tag, index, offset __attribute((unused));
   unsigned int i;
@@ -249,6 +269,22 @@ void variable_length_delta_prefetcher(unsigned long pc, unsigned long address, u
   static struct delta_history_table_entry delta_history_table[DELTA_HISTORY_LENGTH];
   static struct offset_prediction_table_entry offset_prediction_table[PAGE_SIZE / L2_BLOCK_SIZE];
   static struct delta_prediction_table_entry delta_prediction_table[DELTA_PREDICTION_TABLES];
+  unsigned int page_number;
+  unsigned int i;
+  int index = -1;
+
+  page_number = address / PAGE_SIZE;
+
+  for(i = 0; i < DELTA_HISTORY_LENGTH; ++i) {
+    if(delta_history_table[i].page_number == page_number) {
+      index = i;
+      break;
+    }
+  }
+
+  if(index == -1) {
+    index = not_most_recently_used(delta_history_table, DELTA_HISTORY_LENGTH);
+  }
 }
 
 int get_opcode(const char *filename, char *assembly, char *opcode, unsigned long *address, unsigned long *read_register1,
