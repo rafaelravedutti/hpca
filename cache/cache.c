@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <time.h>
 
 /* Number of bytes to read at a time */
 #define CHUNK                       1024
@@ -290,7 +291,7 @@ void variable_length_delta_prefetcher(unsigned long pc, unsigned long address, u
     }
 
     for(i = 0; i < DELTA_PREDICTION_TABLES; ++i) {
-      for(j = 0; j < DELTA_PREDICTION_TABLES; ++j) {
+      for(j = 0; j < PREDICTION_TABLE_LENGTH; ++j) {
         delta_prediction_table[i][j].nmru = 1;
       }
     }
@@ -356,7 +357,7 @@ void variable_length_delta_prefetcher(unsigned long pc, unsigned long address, u
     for(j = 0; j < PREDICTION_TABLE_LENGTH && dpt_index == -1; ++j) {
       matches = 0;
 
-      for(k = 0; k < i + 1; ++j) {
+      for(k = 0; k < i + 1; ++k) {
         if(delta_history_table[dht_index].last_deltas[k] == delta_prediction_table[i][j].deltas[k]) {
           ++matches;
         }
@@ -383,6 +384,9 @@ void variable_length_delta_prefetcher(unsigned long pc, unsigned long address, u
     } else {
       if(delta_prediction_table[dpt_table][dpt_index].accuracy > 0) {
         delta_prediction_table[dpt_table][dpt_index].accuracy--;
+      } else {
+        delta_prediction_table[dpt_table][dpt_index].prediction = delta;
+        delta_prediction_table[dpt_table][dpt_index].accuracy = 1;
       }
     }
 
@@ -393,7 +397,7 @@ void variable_length_delta_prefetcher(unsigned long pc, unsigned long address, u
   if(delta_history_table[dht_index].times_used > 0) {
     /* New entry to Delta Prediction Table */
     if(dpt_table == -1 || dpt_index == -1) {
-      dpt_table = delta_history_table[dht_index].times_used - 1;
+      dpt_table = MIN(DELTA_PREDICTION_TABLES, delta_history_table[dht_index].times_used) - 1;
 
       do {
         i = rand() % PREDICTION_TABLE_LENGTH;
@@ -423,6 +427,8 @@ int get_opcode(const char *filename, char *assembly, char *opcode, unsigned long
   char *tmp_ptr = NULL;
   char buf[CHUNK];
   int i = 0, count = 0;
+
+  srand(time(NULL));
 
   if(file == NULL) {
     file = fopen(filename, "r");
