@@ -392,6 +392,8 @@ void variable_length_delta_prefetcher(unsigned long pc, unsigned long address, u
 
     delta_history_table[dht_index].last_prefetched_offsets[0] = delta_prediction_table[dpt_table][dpt_index].prediction;
     delta_history_table[dht_index].last_predictor = dpt_table;
+    write_l1_data(address + delta_prediction_table[dpt_table][dpt_index].prediction, -1, 0, cycle);
+    write_l2_data(address + delta_prediction_table[dpt_table][dpt_index].prediction, -1, 0, cycle);
   }
 
   if(delta_history_table[dht_index].times_used > 0) {
