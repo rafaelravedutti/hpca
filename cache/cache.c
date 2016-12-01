@@ -375,13 +375,8 @@ void variable_length_delta_prefetcher(unsigned long pc, unsigned long address, u
   }
 
   if(dpt_table != -1 && dpt_index != -1) {
-    for(i = 0; i < 3; ++i) {
-      delta_history_table[dht_index].last_prefetched_offsets[i + 1] = delta_history_table[dht_index].last_prefetched_offsets[i];
-    }
-
     prev_table = delta_history_table[dht_index].last_predictor;
     prev_index = delta_history_table[dht_index].last_predictor_row;
-
 
     /* Update accuracy */
     if(prev_table != -1 && prev_index != -1) {
@@ -397,6 +392,10 @@ void variable_length_delta_prefetcher(unsigned long pc, unsigned long address, u
           delta_prediction_table[prev_table][prev_index].accuracy = 1;
         }
       }
+    }
+
+    for(i = 0; i < 3; ++i) {
+      delta_history_table[dht_index].last_prefetched_offsets[i + 1] = delta_history_table[dht_index].last_prefetched_offsets[i];
     }
 
     delta_history_table[dht_index].last_prefetched_offsets[0] = delta_prediction_table[dpt_table][dpt_index].prediction;
@@ -415,23 +414,23 @@ void variable_length_delta_prefetcher(unsigned long pc, unsigned long address, u
         i = rand() % PREDICTION_TABLE_LENGTH;
       } while(delta_prediction_table[dpt_table][i].nmru == 0);
 
+      dpt_index = i;
+
       for(j = 0; j < PREDICTION_TABLE_LENGTH; ++j) {
         delta_prediction_table[dpt_table][j].nmru = 1;
       }
 
-      for(j = 0; j < 3; ++j) {
-        delta_prediction_table[dpt_table][j + 1] = delta_prediction_table[dpt_table][j];
+      for(j = 0; j < dpt_table + 1; ++j) {
+        delta_prediction_table[dpt_table][dpt_index].deltas[j] = delta_history_table[dht_index].last_deltas[j];
       }
 
-      delta_prediction_table[dpt_table][i].prediction = 0;
-      delta_prediction_table[dpt_table][i].accuracy = 1;
+      delta_prediction_table[dpt_table][dpt_index].prediction = 0;
+      delta_prediction_table[dpt_table][dpt_index].accuracy = 1;
     }
   }
 
-  delta_prediction_table[dpt_table][i].nmru = 0;
+  delta_prediction_table[dpt_table][dpt_index].nmru = 0;
   delta_history_table[dht_index].times_used++;
-
-
 }
 
 int get_opcode(const char *filename, char *assembly, char *opcode, unsigned long *address, unsigned long *read_register1,
