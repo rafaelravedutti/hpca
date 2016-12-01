@@ -94,8 +94,8 @@ struct delta_prediction_table_entry {
   int nmru;
 };
 
-static struct cache_entry l1_cache[L1_SIZE / L1_BLOCK_SIZE][L1_WAYS];
-static struct cache_entry l2_cache[L2_SIZE / L2_BLOCK_SIZE][L2_WAYS];
+static struct cache_entry l1_cache[L1_SIZE / (L1_BLOCK_SIZE * L1_WAYS)][L1_WAYS];
+static struct cache_entry l2_cache[L2_SIZE / (L2_BLOCK_SIZE * L2_WAYS)][L2_WAYS];
 
 int get_least_recently_used(struct cache_entry entries[], unsigned int nways) {
   int result = 0;
@@ -137,8 +137,8 @@ int fetch_data_from_l1(unsigned long address, unsigned int *way, unsigned long c
   unsigned long tag, index, offset __attribute((unused));
   unsigned int i;
 
-  tag = address >> 16;
-  index = (address >> 6) & 0x3FF;
+  tag = address >> 14;
+  index = (address >> 6) & 0xFF;
   offset = address & 0x3F;
 
   for(i = 0; i < L1_WAYS; ++i) {
@@ -157,8 +157,8 @@ int fetch_data_from_l2(unsigned long address, unsigned int *way, unsigned long c
   unsigned long tag, index, offset __attribute((unused));;
   unsigned int i;
 
-  tag = address >> 22;
-  index = (address >> 6) & 0x7FFF;
+  tag = address >> 19;
+  index = (address >> 6) & 0xFFF;
   offset = address & 0x3F;
 
   for(i = 0; i < L2_WAYS; ++i) {
@@ -176,8 +176,8 @@ int fetch_data_from_l2(unsigned long address, unsigned int *way, unsigned long c
 void write_l1_data(unsigned long address, int way, int dirty, unsigned long cycle) {
   unsigned long tag, index, offset __attribute__((unused));
 
-  tag = address >> 16;
-  index = (address >> 6) & 0x3FF;
+  tag = address >> 14;
+  index = (address >> 6) & 0xFF;
   offset = address & 0x3F;
 
   if(way < 0) {
@@ -193,8 +193,8 @@ void write_l1_data(unsigned long address, int way, int dirty, unsigned long cycl
 void write_l2_data(unsigned long address, int way, int dirty, unsigned long cycle) {
   unsigned long tag, index, offset __attribute__((unused));
 
-  tag = address >> 22;
-  index = (address >> 6) & 0x7FFF;
+  tag = address >> 19;
+  index = (address >> 6) & 0xFFF;
   offset = address & 0x3F;
 
   if(way < 0) {
