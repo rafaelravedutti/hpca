@@ -74,6 +74,7 @@ struct delta_history_table_entry {
   unsigned long last_address;
   unsigned long cycle;
   unsigned int last_predictor;
+  unsigned int last_predictor_row;
   unsigned int times_used;
   int last_deltas[4];
   int last_prefetched_offsets[4];
@@ -114,20 +115,20 @@ int get_least_recently_used(struct cache_entry entries[], unsigned int nways) {
 }
 
 int not_most_recently_used(struct delta_history_table_entry *dbh) {
-  int result = 0, lru = 0;
-  unsigned long long min_cycle;
+  int result = 0, mru = 0;
+  unsigned long long max_cycle;
   unsigned int i;
 
-  min_cycle = dbh[0].cycle;
+  max_cycle = dbh[0].cycle;
 
   for(i = 1; i < DELTA_HISTORY_LENGTH; ++i) {
-    if(dbh[i].cycle < min_cycle) {
-      lru = i;
-      min_cycle = dbh[i].cycle;
+    if(dbh[i].cycle > max_cycle) {
+      mru = i;
+      max_cycle = dbh[i].cycle;
     }
   }
 
-  while((result = rand() % DELTA_HISTORY_LENGTH) == lru);
+  while((result = rand() % DELTA_HISTORY_LENGTH) == mru);
 
   return result;
 }
@@ -279,7 +280,7 @@ void variable_length_delta_prefetcher(unsigned long pc, unsigned long address, u
   static int initialized = 0;
   unsigned int page_number;
   unsigned int i, j, k;
-  int opt_index, dht_index = -1, dpt_index = -1, dpt_table = -1, delta = 0, matches;
+  int opt_index, dht_index = -1, dpt_index = -1, dpt_table = -1, delta = 0, matches, prev_table, prev_index;
 
   if(initialized == 0) {
     for(i = 0; i < PAGE_SIZE / L2_BLOCK_SIZE; ++i) {
@@ -288,6 +289,8 @@ void variable_length_delta_prefetcher(unsigned long pc, unsigned long address, u
 
     for(i = 0; i < DELTA_HISTORY_LENGTH; ++i) {
       delta_history_table[i].times_used = 0;
+      delta_history_table[i].last_predictor = -1;
+      delta_history_table[i].last_predictor_row = -1;
     }
 
     for(i = 0; i < DELTA_PREDICTION_TABLES; ++i) {
@@ -376,22 +379,29 @@ void variable_length_delta_prefetcher(unsigned long pc, unsigned long address, u
       delta_history_table[dht_index].last_prefetched_offsets[i + 1] = delta_history_table[dht_index].last_prefetched_offsets[i];
     }
 
+    prev_table = delta_history_table[dht_index].last_predictor;
+    prev_index = delta_history_table[dht_index].last_predictor_row;
+
+
     /* Update accuracy */
-    if(delta_prediction_table[dpt_table][dpt_index].prediction == delta) {
-      if(delta_prediction_table[dpt_table][dpt_index].accuracy < 3) {
-        delta_prediction_table[dpt_table][dpt_index].accuracy++;
-      }
-    } else {
-      if(delta_prediction_table[dpt_table][dpt_index].accuracy > 0) {
-        delta_prediction_table[dpt_table][dpt_index].accuracy--;
+    if(prev_table != -1 && prev_index != -1) {
+      if(delta_prediction_table[prev_table][prev_index].prediction == delta) {
+        if(delta_prediction_table[prev_table][prev_index].accuracy < 3) {
+          delta_prediction_table[prev_table][prev_index].accuracy++;
+        }
       } else {
-        delta_prediction_table[dpt_table][dpt_index].prediction = delta;
-        delta_prediction_table[dpt_table][dpt_index].accuracy = 1;
+        if(delta_prediction_table[prev_table][prev_index].accuracy > 0) {
+          delta_prediction_table[prev_table][prev_index].accuracy--;
+        } else {
+          delta_prediction_table[prev_table][prev_index].prediction = delta;
+          delta_prediction_table[prev_table][prev_index].accuracy = 1;
+        }
       }
     }
 
     delta_history_table[dht_index].last_prefetched_offsets[0] = delta_prediction_table[dpt_table][dpt_index].prediction;
     delta_history_table[dht_index].last_predictor = dpt_table;
+    delta_history_table[dht_index].last_predictor_row = dpt_index;
     write_l1_data(address + delta_prediction_table[dpt_table][dpt_index].prediction, -1, 0, cycle);
     write_l2_data(address + delta_prediction_table[dpt_table][dpt_index].prediction, -1, 0, cycle);
   }
@@ -413,13 +423,15 @@ void variable_length_delta_prefetcher(unsigned long pc, unsigned long address, u
         delta_prediction_table[dpt_table][j + 1] = delta_prediction_table[dpt_table][j];
       }
 
-      delta_prediction_table[dpt_table][i].nmru = 0;
       delta_prediction_table[dpt_table][i].prediction = 0;
       delta_prediction_table[dpt_table][i].accuracy = 1;
     }
   }
 
+  delta_prediction_table[dpt_table][i].nmru = 0;
   delta_history_table[dht_index].times_used++;
+
+
 }
 
 int get_opcode(const char *filename, char *assembly, char *opcode, unsigned long *address, unsigned long *read_register1,
