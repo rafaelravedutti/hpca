@@ -99,7 +99,7 @@ static struct cache_entry l2_cache[L2_SIZE / L2_BLOCK_SIZE][L2_WAYS];
 
 int get_least_recently_used(struct cache_entry entries[], unsigned int nways) {
   int result = 0;
-  unsigned long long min_cycle;
+  unsigned long min_cycle;
   unsigned int i;
 
   min_cycle = entries[0].cycle;
@@ -116,7 +116,7 @@ int get_least_recently_used(struct cache_entry entries[], unsigned int nways) {
 
 int not_most_recently_used(struct delta_history_table_entry *dbh) {
   int result = 0, mru = 0;
-  unsigned long long max_cycle;
+  unsigned long max_cycle;
   unsigned int i;
 
   max_cycle = dbh[0].cycle;
@@ -133,7 +133,7 @@ int not_most_recently_used(struct delta_history_table_entry *dbh) {
   return result;
 }
 
-int fetch_data_from_l1(unsigned long address, unsigned int *way) {
+int fetch_data_from_l1(unsigned long address, unsigned int *way, unsigned long cycle, unsigned long *penalty) {
   unsigned long tag, index, offset __attribute((unused));
   unsigned int i;
 
@@ -144,14 +144,16 @@ int fetch_data_from_l1(unsigned long address, unsigned int *way) {
   for(i = 0; i < L1_WAYS; ++i) {
     if(l1_cache[index][i].valid == 1 && l1_cache[index][i].tag == tag) {
       *way = i;
+      *penalty = (l1_cache[index][i].cycle > cycle) ? (l1_cache[index][i].cycle - cycle) : 0;
       return FETCH_HIT;
     }
   }
 
+  *penalty = 0;
   return FETCH_MISS;
 }
 
-int fetch_data_from_l2(unsigned long address, unsigned int *way) {
+int fetch_data_from_l2(unsigned long address, unsigned int *way, unsigned long cycle, unsigned long *penalty) {
   unsigned long tag, index, offset __attribute((unused));;
   unsigned int i;
 
@@ -162,14 +164,16 @@ int fetch_data_from_l2(unsigned long address, unsigned int *way) {
   for(i = 0; i < L2_WAYS; ++i) {
     if(l2_cache[index][i].valid == 1 && l2_cache[index][i].tag == tag) {
       *way = i;
+      *penalty = (l2_cache[index][i].cycle > cycle) ? (l2_cache[index][i].cycle - cycle) : 0;
       return FETCH_HIT;
     }
   }
 
+  *penalty = 0;
   return FETCH_MISS;
 }
 
-void write_l1_data(unsigned long address, int way, int dirty, unsigned long long cycle) {
+void write_l1_data(unsigned long address, int way, int dirty, unsigned long cycle) {
   unsigned long tag, index, offset __attribute__((unused));
 
   tag = address >> 16;
@@ -186,7 +190,7 @@ void write_l1_data(unsigned long address, int way, int dirty, unsigned long long
   l1_cache[index][way].cycle = cycle + L1_LATENCY;
 }
 
-void write_l2_data(unsigned long address, int way, int dirty, unsigned long long cycle) {
+void write_l2_data(unsigned long address, int way, int dirty, unsigned long cycle) {
   unsigned long tag, index, offset __attribute__((unused));
 
   tag = address >> 22;
@@ -203,11 +207,11 @@ void write_l2_data(unsigned long address, int way, int dirty, unsigned long long
   l2_cache[index][way].cycle = cycle + L2_LATENCY;
 }
 
-void no_prefetcher(unsigned long pc, unsigned long address, unsigned long long cycle) {
+void no_prefetcher(unsigned long pc, unsigned long address, unsigned long cycle) {
   /* Does nothing */
 }
 
-void stride_based_prefetcher(unsigned long pc, unsigned long address, unsigned long long cycle) {
+void stride_based_prefetcher(unsigned long pc, unsigned long address, unsigned long cycle) {
   static struct reference_prediction_entry reference_prediction_table[STRIDE_PREFETCHER_ENTRIES];
   static int initialized = 0;
   int index, available;
@@ -265,7 +269,6 @@ void stride_based_prefetcher(unsigned long pc, unsigned long address, unsigned l
     }
 
     if(reference_prediction_table[index].state != STATE_NO_PRED) {
-      write_l1_data(address + reference_prediction_table[index].stride, -1, 0, cycle);
       write_l2_data(address + reference_prediction_table[index].stride, -1, 0, cycle);
     }
 
@@ -273,7 +276,7 @@ void stride_based_prefetcher(unsigned long pc, unsigned long address, unsigned l
   }
 }
 
-void variable_length_delta_prefetcher(unsigned long pc, unsigned long address, unsigned long long cycle) {
+void variable_length_delta_prefetcher(unsigned long pc, unsigned long address, unsigned long cycle) {
   static struct delta_history_table_entry delta_history_table[DELTA_HISTORY_LENGTH];
   static struct offset_prediction_table_entry offset_prediction_table[PAGE_SIZE / L2_BLOCK_SIZE];
   static struct delta_prediction_table_entry delta_prediction_table[DELTA_PREDICTION_TABLES][PREDICTION_TABLE_LENGTH];
@@ -311,7 +314,6 @@ void variable_length_delta_prefetcher(unsigned long pc, unsigned long address, u
     offset_prediction_table[opt_index].first_access = 1;
   } else {
     if(offset_prediction_table[opt_index].accuracy == 1) {
-      write_l1_data(address + offset_prediction_table[opt_index].delta_prediction, -1, 0, cycle);
       write_l2_data(address + offset_prediction_table[opt_index].delta_prediction, -1, 0, cycle);
     }
 
@@ -503,7 +505,7 @@ int main(int argc, char *const *argv) {
   unsigned long address;
   unsigned long read_register1, read_register2, write_register;
   unsigned long l1_hit = 0, l1_miss = 0, l2_hit = 0, l2_miss = 0;
-  unsigned long long cycles = 0;
+  unsigned long cycles = 0, penalty = 0;
 
   while((opt = getopt(argc, argv, "v")) != -1) {
     switch(opt) {
@@ -535,25 +537,25 @@ int main(int argc, char *const *argv) {
     }
 
 #ifndef CACHE_LOOKUP
-#define CACHE_LOOKUP(mem)   if(mem != 0) {                                            \
-                              if(fetch_data_from_l1(mem, &way) == FETCH_MISS) {       \
-                                if(fetch_data_from_l2(mem, &way) == FETCH_MISS) {     \
-                                  cycles += DRAM_LATENCY;                             \
-                                  ++l2_miss;                                          \
-                                  write_l2_data(mem, -1, 0, cycles);                  \
-                                } else {                                              \
-                                  ++l2_hit;                                           \
-                                  write_l1_data(mem, -1, 0, cycles);                  \
-                                }                                                     \
-                                                                                      \
-                                cycles += L2_LATENCY;                                 \
-                                ++l1_miss;                                            \
-                              } else {                                                \
-                                ++l1_hit;                                             \
-                              }                                                       \
-                                                                                      \
-                              cycles += L1_LATENCY;                                   \
-                              CACHE_PREFETCHER(address, mem, cycles);                 \
+#define CACHE_LOOKUP(mem)   if(mem != 0) {                                                          \
+                              if(fetch_data_from_l1(mem, &way, cycles, &penalty) == FETCH_MISS) {   \
+                                if(fetch_data_from_l2(mem, &way, cycles, &penalty) == FETCH_MISS) { \
+                                  cycles += DRAM_LATENCY + penalty;                                 \
+                                  ++l2_miss;                                                        \
+                                  write_l2_data(mem, -1, 0, cycles);                                \
+                                } else {                                                            \
+                                  ++l2_hit;                                                         \
+                                  write_l1_data(mem, -1, 0, cycles);                                \
+                                }                                                                   \
+                                                                                                    \
+                                cycles += L2_LATENCY + penalty;                                     \
+                                ++l1_miss;                                                          \
+                              } else {                                                              \
+                                ++l1_hit;                                                           \
+                              }                                                                     \
+                                                                                                    \
+                              cycles += L1_LATENCY + penalty;                                       \
+                              CACHE_PREFETCHER(address, mem, cycles);                               \
                             }
 #endif
 
@@ -585,6 +587,6 @@ int main(int argc, char *const *argv) {
 
   }
 
-  fprintf(stdout, "Cycles: %llu\nL1 Hit/Miss: %lu/%lu\nL2 Hit/Miss: %lu/%lu\n", cycles, l1_hit, l1_miss, l2_hit, l2_miss);
+  fprintf(stdout, "Cycles: %lu\nL1 Hit/Miss: %lu/%lu\nL2 Hit/Miss: %lu/%lu\n", cycles, l1_hit, l1_miss, l2_hit, l2_miss);
   return 0;
 }
