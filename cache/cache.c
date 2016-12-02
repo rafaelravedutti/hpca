@@ -406,7 +406,7 @@ pae:
         delta_prediction_table[last_predictor][last_index].accuracy--;
       } else {
         delta_prediction_table[last_predictor][last_index].prediction = delta;
-        delta_prediction_table[last_predictor][last_index].accuracy = 1;
+        delta_prediction_table[last_predictor][last_index].accuracy = 0;
       }
     }
   }
