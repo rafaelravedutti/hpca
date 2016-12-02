@@ -63,6 +63,7 @@ struct cache_entry {
   unsigned long cycle;
   int valid;
   int dirty;
+  int prefetched;
 };
 
 struct reference_prediction_entry {
@@ -70,7 +71,6 @@ struct reference_prediction_entry {
   unsigned long last_address;
   unsigned int stride;
   unsigned char state; /* Init - Trans - Steady - No Pred */
-  int prefetch_used;
 };
 
 struct delta_history_table_entry {
@@ -169,6 +169,11 @@ int fetch_data_from_l2(unsigned long address, unsigned int *way, unsigned long c
 
   for(i = 0; i < L2_WAYS; ++i) {
     if(l2_cache[index][i].valid == 1 && l2_cache[index][i].tag == tag) {
+      if(l2_cache[index][i].prefetched == 1) {
+        l2_cache[index][i].prefetched = 0;
+        ++useful_prefetches;
+      }
+
       *way = i;
       *penalty = (l2_cache[index][i].cycle > cycle) ? (l2_cache[index][i].cycle - cycle) : 0;
       return FETCH_HIT;
@@ -192,11 +197,12 @@ void write_l1_data(unsigned long address, int way, int dirty, unsigned long cycl
 
   l1_cache[index][way].valid = 1;
   l1_cache[index][way].dirty = dirty;
+  l1_cache[index][way].prefetched = 0;
   l1_cache[index][way].tag = tag;
   l1_cache[index][way].cycle = cycle + L1_LATENCY;
 }
 
-void write_l2_data(unsigned long address, int way, int dirty, unsigned long cycle) {
+void write_l2_data(unsigned long address, int way, int dirty, int prefetched, unsigned long cycle) {
   unsigned long tag, index, offset __attribute__((unused));
 
   tag = address >> 19;
@@ -207,8 +213,13 @@ void write_l2_data(unsigned long address, int way, int dirty, unsigned long cycl
     way = get_least_recently_used(l2_cache[index], L1_WAYS);
   }
 
+  if(prefetched == 1) {
+    ++total_prefetches;
+  }
+
   l2_cache[index][way].valid = 1;
   l2_cache[index][way].dirty = dirty;
+  l2_cache[index][way].prefetched = prefetched;
   l2_cache[index][way].tag = tag;
   l2_cache[index][way].cycle = cycle + L2_LATENCY;
 }
@@ -260,11 +271,6 @@ void stride_based_prefetcher(unsigned long pc, unsigned long address, unsigned l
       } else {
         reference_prediction_table[index].state = STATE_STEADY;
       }
-
-      if(reference_prediction_table[index].prefetch_used == 0) {
-        ++useful_prefetches;
-        reference_prediction_table[index].prefetch_used = 1;
-      }
     /* Incorrect */
     } else {
       if(reference_prediction_table[index].state == STATE_INIT) {
@@ -280,9 +286,7 @@ void stride_based_prefetcher(unsigned long pc, unsigned long address, unsigned l
     }
 
     if(reference_prediction_table[index].state != STATE_NO_PRED) {
-      reference_prediction_table[index].prefetch_used = 0;
-      write_l2_data(address + reference_prediction_table[index].stride, -1, 0, cycle);
-      ++total_prefetches;
+      write_l2_data(address + reference_prediction_table[index].stride, -1, 0, 1, cycle);
     }
 
     reference_prediction_table[index].last_address = address;
@@ -332,7 +336,6 @@ void variable_length_delta_prefetcher(unsigned long pc, unsigned long address, u
     if(dht_index != -1) {
       for(i = 0; i < 4; ++i) {
         if(delta_history_table[dht_index].last_prefetched_offsets[i] == address) {
-          ++useful_prefetches;
           goto pae; /* Ugly but works */
         }
       }
@@ -368,8 +371,7 @@ pae:
     offset_prediction_table[opt_index].first_access = 1;
   } else {
     if(offset_prediction_table[opt_index].accuracy == 1) {
-      write_l2_data(address + offset_prediction_table[opt_index].delta_prediction, -1, 0, cycle);
-      ++total_prefetches;
+      write_l2_data(address + offset_prediction_table[opt_index].delta_prediction, -1, 0, 1, cycle);
     }
 
     if(address - offset_prediction_table[opt_index].last_address == offset_prediction_table[opt_index].delta_prediction) {
@@ -432,8 +434,7 @@ pae:
     delta_history_table[dht_index].last_prefetched_offsets[0] = address + delta_prediction_table[dpt_table][dpt_index].prediction;
     delta_history_table[dht_index].last_predictor = dpt_table;
     delta_history_table[dht_index].last_index = dpt_index;
-    write_l2_data(address + delta_prediction_table[dpt_table][dpt_index].prediction, -1, 0, cycle);
-    ++total_prefetches;
+    write_l2_data(address + delta_prediction_table[dpt_table][dpt_index].prediction, -1, 0, 1, cycle);
   }
 
   /* New entry to Delta Prediction Table */
@@ -587,7 +588,7 @@ int main(int argc, char *const *argv) {
                                   cycles += DRAM_LATENCY + penalty;                                 \
                                   ++l2_miss;                                                        \
                                   missed_l2 = 1;                                                    \
-                                  write_l2_data(mem, -1, 0, cycles);                                \
+                                  write_l2_data(mem, -1, 0, 0, cycles);                             \
                                 } else {                                                            \
                                   ++l2_hit;                                                         \
                                   write_l1_data(mem, -1, 0, cycles);                                \
