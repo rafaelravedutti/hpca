@@ -70,6 +70,7 @@ struct reference_prediction_entry {
   unsigned long last_address;
   unsigned int stride;
   unsigned char state; /* Init - Trans - Steady - No Pred */
+  int prefetch_used;
 };
 
 struct delta_history_table_entry {
@@ -99,8 +100,8 @@ struct delta_prediction_table_entry {
 
 static struct cache_entry l1_cache[L1_SIZE / (L1_BLOCK_SIZE * L1_WAYS)][L1_WAYS];
 static struct cache_entry l2_cache[L2_SIZE / (L2_BLOCK_SIZE * L2_WAYS)][L2_WAYS];
-static unsigned long total_prefetches = 0;
-static unsigned long useful_prefetches = 0;
+static unsigned long long total_prefetches = 0;
+static unsigned long long useful_prefetches = 0;
 
 int get_least_recently_used(struct cache_entry entries[], unsigned int nways) {
   int result = 0;
@@ -260,7 +261,10 @@ void stride_based_prefetcher(unsigned long pc, unsigned long address, unsigned l
         reference_prediction_table[index].state = STATE_STEADY;
       }
 
-      ++useful_prefetches;
+      if(reference_prediction_table[index].prefetch_used == 0) {
+        ++useful_prefetches;
+        reference_prediction_table[index].prefetch_used = 1;
+      }
     /* Incorrect */
     } else {
       if(reference_prediction_table[index].state == STATE_INIT) {
@@ -276,6 +280,7 @@ void stride_based_prefetcher(unsigned long pc, unsigned long address, unsigned l
     }
 
     if(reference_prediction_table[index].state != STATE_NO_PRED) {
+      reference_prediction_table[index].prefetch_used = 0;
       write_l2_data(address + reference_prediction_table[index].stride, -1, 0, cycle);
       ++total_prefetches;
     }
@@ -631,7 +636,7 @@ int main(int argc, char *const *argv) {
   miss_rate /= l1_miss + l2_miss + l1_hit + l2_hit;
   prefetch_rate = (total_prefetches > 0) ? ((double) useful_prefetches / (double) total_prefetches) : 0;
   fprintf(stdout, "Cycles: %lu\nL1 Hit/Miss: %lu/%lu\nL2 Hit/Miss: %lu/%lu\n", cycles, l1_hit, l1_miss, l2_hit, l2_miss);
-  fprintf(stdout, "Prefetches Used/Total: %lu/%lu\n", useful_prefetches, total_prefetches);
+  fprintf(stdout, "Prefetches Used/Total: %llu/%llu\n", useful_prefetches, total_prefetches);
   fprintf(stdout, "Miss Rate: %.6f\n", miss_rate);
   fprintf(stdout, "Prefetch Rate: %.6f\n", prefetch_rate);
   return 0;
