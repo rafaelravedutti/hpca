@@ -99,6 +99,8 @@ struct delta_prediction_table_entry {
 
 static struct cache_entry l1_cache[L1_SIZE / (L1_BLOCK_SIZE * L1_WAYS)][L1_WAYS];
 static struct cache_entry l2_cache[L2_SIZE / (L2_BLOCK_SIZE * L2_WAYS)][L2_WAYS];
+static unsigned long total_prefetches = 0;
+static unsigned long useful_prefetches = 0;
 
 int get_least_recently_used(struct cache_entry entries[], unsigned int nways) {
   int result = 0;
@@ -257,6 +259,8 @@ void stride_based_prefetcher(unsigned long pc, unsigned long address, unsigned l
       } else {
         reference_prediction_table[index].state = STATE_STEADY;
       }
+
+      ++useful_prefetches;
     /* Incorrect */
     } else {
       if(reference_prediction_table[index].state == STATE_INIT) {
@@ -273,6 +277,7 @@ void stride_based_prefetcher(unsigned long pc, unsigned long address, unsigned l
 
     if(reference_prediction_table[index].state != STATE_NO_PRED) {
       write_l2_data(address + reference_prediction_table[index].stride, -1, 0, cycle);
+      ++total_prefetches;
     }
 
     reference_prediction_table[index].last_address = address;
@@ -322,6 +327,7 @@ void variable_length_delta_prefetcher(unsigned long pc, unsigned long address, u
     if(dht_index != -1) {
       for(i = 0; i < 4; ++i) {
         if(delta_history_table[dht_index].last_prefetched_offsets[i] == address) {
+          ++useful_prefetches;
           goto pae; /* Ugly but works */
         }
       }
@@ -358,6 +364,7 @@ pae:
   } else {
     if(offset_prediction_table[opt_index].accuracy == 1) {
       write_l2_data(address + offset_prediction_table[opt_index].delta_prediction, -1, 0, cycle);
+      ++total_prefetches;
     }
 
     if(address - offset_prediction_table[opt_index].last_address == offset_prediction_table[opt_index].delta_prediction) {
@@ -421,6 +428,7 @@ pae:
     delta_history_table[dht_index].last_predictor = dpt_table;
     delta_history_table[dht_index].last_index = dpt_index;
     write_l2_data(address + delta_prediction_table[dpt_table][dpt_index].prediction, -1, 0, cycle);
+    ++total_prefetches;
   }
 
   /* New entry to Delta Prediction Table */
@@ -528,6 +536,7 @@ int get_opcode(const char *filename, char *assembly, char *opcode, unsigned long
 int main(int argc, char *const *argv) {
   char assembly[20];
   char opcode[20];
+  double miss_rate, prefetch_rate;
   int verbose = 0;
   int opt;
   unsigned int way;
@@ -618,6 +627,12 @@ int main(int argc, char *const *argv) {
 
   }
 
+  miss_rate = (double) l1_miss + (double) l2_miss;
+  miss_rate /= l1_miss + l2_miss + l1_hit + l2_hit;
+  prefetch_rate = (total_prefetches > 0) ? ((double) useful_prefetches / (double) total_prefetches) : 0;
   fprintf(stdout, "Cycles: %lu\nL1 Hit/Miss: %lu/%lu\nL2 Hit/Miss: %lu/%lu\n", cycles, l1_hit, l1_miss, l2_hit, l2_miss);
+  fprintf(stdout, "Prefetches Used/Total: %lu/%lu\n", useful_prefetches, total_prefetches);
+  fprintf(stdout, "Miss Rate: %.6f\n", miss_rate);
+  fprintf(stdout, "Prefetch Rate: %.6f\n", prefetch_rate);
   return 0;
 }
