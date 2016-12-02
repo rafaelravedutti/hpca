@@ -41,6 +41,9 @@
 #define DELTA_PREDICTION_TABLES     3
 #define PREDICTION_TABLE_LENGTH     64
 
+/* Invalid predictor (convention) */
+#define INVALID_PREDICTOR           (9999)
+
 /* Minimum function */
 #define MIN(a,b)                    (((a) < (b)) ? (a) : (b))
 
@@ -73,9 +76,9 @@ struct delta_history_table_entry {
   unsigned long page_number;
   unsigned long last_address;
   unsigned long cycle;
-  unsigned int last_predictor;
-  unsigned int last_predictor_row;
   unsigned int times_used;
+  unsigned int last_predictor;
+  unsigned int last_index;
   int last_deltas[4];
   int last_prefetched_offsets[4];
 };
@@ -207,11 +210,11 @@ void write_l2_data(unsigned long address, int way, int dirty, unsigned long cycl
   l2_cache[index][way].cycle = cycle + L2_LATENCY;
 }
 
-void no_prefetcher(unsigned long pc, unsigned long address, unsigned long cycle) {
+void no_prefetcher(unsigned long pc, unsigned long address, unsigned long cycle, unsigned int missed_l2) {
   /* Does nothing */
 }
 
-void stride_based_prefetcher(unsigned long pc, unsigned long address, unsigned long cycle) {
+void stride_based_prefetcher(unsigned long pc, unsigned long address, unsigned long cycle, unsigned int missed_l2) {
   static struct reference_prediction_entry reference_prediction_table[STRIDE_PREFETCHER_ENTRIES];
   static int initialized = 0;
   int index, available;
@@ -276,14 +279,13 @@ void stride_based_prefetcher(unsigned long pc, unsigned long address, unsigned l
   }
 }
 
-void variable_length_delta_prefetcher(unsigned long pc, unsigned long address, unsigned long cycle) {
+void variable_length_delta_prefetcher(unsigned long pc, unsigned long address, unsigned long cycle, unsigned int missed_l2) {
   static struct delta_history_table_entry delta_history_table[DELTA_HISTORY_LENGTH];
   static struct offset_prediction_table_entry offset_prediction_table[PAGE_SIZE / L2_BLOCK_SIZE];
   static struct delta_prediction_table_entry delta_prediction_table[DELTA_PREDICTION_TABLES][PREDICTION_TABLE_LENGTH];
   static int initialized = 0;
-  unsigned int page_number;
-  unsigned int i, j, k;
-  int opt_index, dht_index = -1, dpt_index = -1, dpt_table = -1, delta = 0, matches, prev_table, prev_index;
+  unsigned int page_number, matches, last_predictor, last_index, i, j, k;
+  int opt_index, dht_index = -1, dpt_index = -1, dpt_table = -1, delta = 0;
 
   if(initialized == 0) {
     for(i = 0; i < PAGE_SIZE / L2_BLOCK_SIZE; ++i) {
@@ -291,9 +293,9 @@ void variable_length_delta_prefetcher(unsigned long pc, unsigned long address, u
     }
 
     for(i = 0; i < DELTA_HISTORY_LENGTH; ++i) {
+      delta_history_table[i].last_predictor = INVALID_PREDICTOR;
+      delta_history_table[i].last_index = 0;
       delta_history_table[i].times_used = 0;
-      delta_history_table[i].last_predictor = -1;
-      delta_history_table[i].last_predictor_row = -1;
     }
 
     for(i = 0; i < DELTA_PREDICTION_TABLES; ++i) {
@@ -304,6 +306,47 @@ void variable_length_delta_prefetcher(unsigned long pc, unsigned long address, u
 
     initialized = 1;
   }
+
+  /* Delta History Table */
+  page_number = address / PAGE_SIZE;
+
+  /* Fully associative search */
+  for(i = 0; i < DELTA_HISTORY_LENGTH; ++i) {
+    if(delta_history_table[i].page_number == page_number) {
+      dht_index = i;
+      break;
+    }
+  }
+
+  if(missed_l2 == 0) {
+    if(dht_index != -1) {
+      for(i = 0; i < 4; ++i) {
+        if(delta_history_table[dht_index].last_prefetched_offsets[i] == address) {
+          goto pae; /* Ugly but works */
+        }
+      }
+    }
+
+    return; /* Not a PAE, don't do anything */
+  }
+
+pae:
+
+  if(dht_index == -1) {
+    dht_index = not_most_recently_used(delta_history_table);
+    delta_history_table[dht_index].page_number = page_number;
+    delta_history_table[dht_index].times_used = 0;
+  } else {
+    delta = (address % PAGE_SIZE) - delta_history_table[dht_index].last_address;
+  }
+
+  delta_history_table[dht_index].last_address = address % PAGE_SIZE;
+
+  for(i = 0; i < 4; ++i) {
+    delta_history_table[dht_index].last_deltas[i + 1] = delta_history_table[dht_index].last_deltas[i];
+  }
+
+  delta_history_table[dht_index].last_deltas[0] = delta;
 
   /* Offset Prediction Table */
   opt_index = (address % PAGE_SIZE) / L2_BLOCK_SIZE;
@@ -330,35 +373,8 @@ void variable_length_delta_prefetcher(unsigned long pc, unsigned long address, u
 
   offset_prediction_table[opt_index].last_address = address;
 
-  /* Delta History Table */
-  page_number = address / PAGE_SIZE;
-
-  /* Fully associative search */
-  for(i = 0; i < DELTA_HISTORY_LENGTH; ++i) {
-    if(delta_history_table[i].page_number == page_number) {
-      dht_index = i;
-      break;
-    }
-  }
-
-  if(dht_index == -1) {
-    dht_index = not_most_recently_used(delta_history_table);
-    delta_history_table[dht_index].page_number = page_number;
-    delta_history_table[dht_index].times_used = 0;
-  } else {
-    delta = (address % PAGE_SIZE) - delta_history_table[dht_index].last_address;
-  }
-
-  delta_history_table[dht_index].last_address = address % PAGE_SIZE;
-
-  for(i = 0; i < 3; ++i) {
-    delta_history_table[dht_index].last_deltas[i + 1] = delta_history_table[dht_index].last_deltas[i];
-  }
-
-  delta_history_table[dht_index].last_deltas[0] = delta;
-
   /* Delta Prediction Table */
-  for(i = 0; i < MIN(DELTA_PREDICTION_TABLES, delta_history_table[dht_index].times_used) && dpt_index == -1; ++i) {
+  for(i = MIN(DELTA_PREDICTION_TABLES, delta_history_table[dht_index].times_used) - 1; i >= 0 && dpt_index == -1; --i) {
     for(j = 0; j < PREDICTION_TABLE_LENGTH && dpt_index == -1; ++j) {
       matches = 0;
 
@@ -376,59 +392,72 @@ void variable_length_delta_prefetcher(unsigned long pc, unsigned long address, u
     }
   }
 
-  if(dpt_table != -1 && dpt_index != -1) {
-    prev_table = delta_history_table[dht_index].last_predictor;
-    prev_index = delta_history_table[dht_index].last_predictor_row;
+  last_predictor = delta_history_table[dht_index].last_predictor;
+  last_index = delta_history_table[dht_index].last_index;
 
-    /* Update accuracy */
-    if(prev_table != -1 && prev_index != -1) {
-      if(delta_prediction_table[prev_table][prev_index].prediction == delta) {
-        if(delta_prediction_table[prev_table][prev_index].accuracy < 3) {
-          delta_prediction_table[prev_table][prev_index].accuracy++;
-        }
+  /* Update accuracy */
+  if(last_predictor != INVALID_PREDICTOR) {
+    if(delta_prediction_table[last_predictor][last_index].prediction == delta) {
+      if(delta_prediction_table[last_predictor][last_index].accuracy < 3) {
+        delta_prediction_table[last_predictor][last_index].accuracy++;
+      }
+    } else {
+      if(delta_prediction_table[last_predictor][last_index].accuracy > 0) {
+        delta_prediction_table[last_predictor][last_index].accuracy--;
       } else {
-        if(delta_prediction_table[prev_table][prev_index].accuracy > 0) {
-          delta_prediction_table[prev_table][prev_index].accuracy--;
-        } else {
-          delta_prediction_table[prev_table][prev_index].prediction = delta;
-          delta_prediction_table[prev_table][prev_index].accuracy = 1;
-        }
+        delta_prediction_table[last_predictor][last_index].prediction = delta;
+        delta_prediction_table[last_predictor][last_index].accuracy = 1;
       }
     }
+  }
 
-    for(i = 0; i < 3; ++i) {
+  /* Get new prediction */
+  if(dpt_table != -1 && dpt_index != -1) {
+    for(i = 0; i < 4; ++i) {
       delta_history_table[dht_index].last_prefetched_offsets[i + 1] = delta_history_table[dht_index].last_prefetched_offsets[i];
     }
 
-    delta_history_table[dht_index].last_prefetched_offsets[0] = delta_prediction_table[dpt_table][dpt_index].prediction;
+    delta_history_table[dht_index].last_prefetched_offsets[0] = address + delta_prediction_table[dpt_table][dpt_index].prediction;
     delta_history_table[dht_index].last_predictor = dpt_table;
-    delta_history_table[dht_index].last_predictor_row = dpt_index;
+    delta_history_table[dht_index].last_index = dpt_index;
     write_l2_data(address + delta_prediction_table[dpt_table][dpt_index].prediction, -1, 0, cycle);
   }
 
+  /* New entry to Delta Prediction Table */
   if(delta_history_table[dht_index].times_used > 0) {
-    /* New entry to Delta Prediction Table */
-    if(dpt_table == -1 || dpt_index == -1) {
-      dpt_table = MIN(DELTA_PREDICTION_TABLES, delta_history_table[dht_index].times_used) - 1;
+    dpt_table = MIN(DELTA_PREDICTION_TABLES, delta_history_table[dht_index].times_used) - 1;
 
-      do {
-        i = rand() % PREDICTION_TABLE_LENGTH;
-      } while(delta_prediction_table[dpt_table][i].nmru == 0);
-
-      dpt_index = i;
-
-      for(j = 0; j < PREDICTION_TABLE_LENGTH; ++j) {
-        delta_prediction_table[dpt_table][j].nmru = 1;
-      }
+    for(i = 0; i < PREDICTION_TABLE_LENGTH; ++i) {
+      matches = 0;
 
       for(j = 0; j < dpt_table + 1; ++j) {
-        delta_prediction_table[dpt_table][dpt_index].deltas[j] = delta_history_table[dht_index].last_deltas[j];
+        if(delta_history_table[dht_index].last_deltas[j] == delta_prediction_table[dpt_table][i].deltas[j]) {
+          ++matches;
+        }
       }
 
-      delta_prediction_table[dpt_table][dpt_index].prediction = 0;
-      delta_prediction_table[dpt_table][dpt_index].accuracy = 1;
+      if(matches == dpt_table + 1) {
+        goto entry_exists; /* Ugly but works! */
+      }
     }
+
+    do {
+      dpt_index = rand() % PREDICTION_TABLE_LENGTH;
+    } while(delta_prediction_table[dpt_table][dpt_index].nmru == 0);
+
+    for(j = 0; j < PREDICTION_TABLE_LENGTH; ++j) {
+      delta_prediction_table[dpt_table][j].nmru = 1;
+    }
+
+    for(j = 0; j < dpt_table + 1; ++j) {
+      delta_prediction_table[dpt_table][dpt_index].deltas[j] = delta_history_table[dht_index].last_deltas[j];
+    }
+
+    delta_prediction_table[dpt_table][dpt_index].prediction = 0;
+    delta_prediction_table[dpt_table][dpt_index].accuracy = 1;
   }
+
+entry_exists:
 
   delta_prediction_table[dpt_table][dpt_index].nmru = 0;
   delta_history_table[dht_index].times_used++;
@@ -503,7 +532,7 @@ int main(int argc, char *const *argv) {
   int opt;
   unsigned int way;
   unsigned long address;
-  unsigned long read_register1, read_register2, write_register;
+  unsigned long read_register1, read_register2, write_register, missed_l2;
   unsigned long l1_hit = 0, l1_miss = 0, l2_hit = 0, l2_miss = 0;
   unsigned long cycles = 0, penalty = 0;
 
@@ -525,6 +554,7 @@ int main(int argc, char *const *argv) {
 
   while(get_opcode(argv[optind], assembly, opcode, &address, &read_register1, &read_register2, &write_register)) {
     ++cycles;
+    missed_l2 = 0;
 
     if(verbose != 0) {
       printf(" Asm:%s", assembly);
@@ -542,6 +572,7 @@ int main(int argc, char *const *argv) {
                                 if(fetch_data_from_l2(mem, &way, cycles, &penalty) == FETCH_MISS) { \
                                   cycles += DRAM_LATENCY + penalty;                                 \
                                   ++l2_miss;                                                        \
+                                  missed_l2 = 1;                                                    \
                                   write_l2_data(mem, -1, 0, cycles);                                \
                                 } else {                                                            \
                                   ++l2_hit;                                                         \
@@ -555,7 +586,7 @@ int main(int argc, char *const *argv) {
                               }                                                                     \
                                                                                                     \
                               cycles += L1_LATENCY + penalty;                                       \
-                              CACHE_PREFETCHER(address, mem, cycles);                               \
+                              CACHE_PREFETCHER(address, mem, cycles, missed_l2);                    \
                             }
 #endif
 
