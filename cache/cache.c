@@ -633,8 +633,7 @@ int main(int argc, char *const *argv) {
 
   }
 
-  miss_rate = (double) l1_miss + (double) l2_miss;
-  miss_rate /= l1_miss + l2_miss + l1_hit + l2_hit;
+  miss_rate = ((double) l1_miss + (double) l2_miss) / (l1_miss + l2_miss + l1_hit + l2_hit);
   prefetch_rate = (total_prefetches > 0) ? ((double) useful_prefetches / (double) total_prefetches) : 0;
   fprintf(stdout, "Cycles: %lu\nL1 Hit/Miss: %lu/%lu\nL2 Hit/Miss: %lu/%lu\n", cycles, l1_hit, l1_miss, l2_hit, l2_miss);
   fprintf(stdout, "Prefetches Used/Total: %llu/%llu\n", useful_prefetches, total_prefetches);
