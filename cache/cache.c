@@ -1,3 +1,24 @@
+/*
+ * Cache Prefetchers Comparisons
+ *
+ * Copyright (C) 2016  Mateus Ravedutti Lucio Machado
+ *                     Rafael Ravedutti Lucio Machado
+ * 
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -635,6 +656,7 @@ int main(int argc, char *const *argv) {
 
   miss_rate = ((double) l1_miss + (double) l2_miss) / (l1_miss + l2_miss + l1_hit + l2_hit);
   prefetch_rate = (total_prefetches > 0) ? ((double) useful_prefetches / (double) total_prefetches) : 0;
+
   fprintf(stdout, "Cycles: %lu\nL1 Hit/Miss: %lu/%lu\nL2 Hit/Miss: %lu/%lu\n", cycles, l1_hit, l1_miss, l2_hit, l2_miss);
   fprintf(stdout, "Prefetches Used/Total: %llu/%llu\n", useful_prefetches, total_prefetches);
   fprintf(stdout, "Miss Rate: %.6f\n", miss_rate);
